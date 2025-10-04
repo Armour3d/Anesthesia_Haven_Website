@@ -1,258 +1,388 @@
-<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="utf-8" />
-    <title>Induction to Impact: Operation Haven</title>
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <!-- Tailwind CDN -->
-    <script src="https://cdn.tailwindcss.com"></script>
-    <!-- React 18 UMD + Babel (to run JSX in-browser) -->
-    <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
-    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
-    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-    <style>
-      @media print { body { margin: 0 } }
-      /* show runtime errors at bottom so “blank page” is easier to diagnose */
-      #err { position: fixed; left:0; right:0; bottom:0; background:#fee; color:#900; padding:.5rem .75rem; font:14px system-ui; display:none; white-space:pre-wrap }
-    </style>
-  </head>
-  <body class="bg-emerald-50">
-    <div id="root"></div>
-    <div id="err"></div>
-    <script>
-      window.addEventListener('error', e => {
-        const box = document.getElementById('err');
-        box.style.display = 'block';
-        box.textContent = 'JS Error: ' + e.message;
-      });
-    </script>
+import * as React from "react";
 
-    <!-- Your app (JSX runs via Babel in the browser) -->
-    <script type="text/babel" data-presets="react">
-      /* -------- Progress utilities -------- */
-      function getParamNumber(name, fallback) {
-        const url = new URL(window.location.href);
-        const v = url.searchParams.get(name);
-        const n = v == null ? NaN : Number(v);
-        return Number.isFinite(n) ? n : fallback;
-      }
+/**
+ * Operation Haven Poster – IV bag that FILLS as progress increases
+ * - Uses your PNG as a CSS mask so the green fluid appears inside the bag
+ * - Adds a level badge that tracks the fluid top (so it “sits” near the picture)
+ * - Keeps live progress via ./progress.json (or URL params ?goal=&raised=)
+ * - Fixes previous syntax pitfalls
+ * - Includes console-based runtime tests
+ */
 
-      // Optional: fetch live { "goal": 20000, "raised": 7350 } from ./progress.json
-      function useProgress({ url, defaultGoal, defaultRaised, intervalMs = 60000 }) {
-        const [goal, setGoal] = React.useState(getParamNumber("goal", defaultGoal));
-        const [raised, setRaised] = React.useState(getParamNumber("raised", defaultRaised));
+/*************************
+ * Progress utilities
+ *************************/
+function getParamNumber(name: string, fallback: number): number {
+  try {
+    const url = new URL(window.location.href);
+    const v = url.searchParams.get(name);
+    const n = v == null ? NaN : Number(v);
+    return Number.isFinite(n) ? n : fallback;
+  } catch {
+    return fallback;
+  }
+}
 
-        React.useEffect(() => {
-          let timer;
-          async function fetchOnce() {
-            if (!url) return;
-            try {
-              const res = await fetch(url, { cache: "no-store" });
-              if (!res.ok) return;
-              const data = await res.json();
-              if (typeof data.goal === "number") setGoal(data.goal);
-              if (typeof data.raised === "number") setRaised(data.raised);
-            } catch {}
-          }
-          fetchOnce();
-          if (url && intervalMs > 0) timer = setInterval(fetchOnce, intervalMs);
-          return () => timer && clearInterval(timer);
-        }, [url, intervalMs]);
+export function clamp01(x: number): number {
+  if (!Number.isFinite(x)) return 0;
+  if (x < 0) return 0;
+  if (x > 1) return 1;
+  return x;
+}
 
-        return { goal, raised };
-      }
+export function pctRaised(goal: number, raised: number): number {
+  const p = goal > 0 ? raised / goal : 0;
+  return Math.round(clamp01(p) * 100);
+}
 
-      /* -------- UI bits -------- */
-      function Logo({ src, alt, size = "w-24 h-24", frame = false }) {
-        const frameClasses = frame ? "rounded-md bg-white p-1 shadow-sm border border-white/60" : "";
-        return <img src={src} alt={alt} className={`${size} object-contain ${frameClasses}`} />;
-      }
+export function computeHeightPct(goal: number, raised: number, mode: "emptying" | "filling" = "filling"): number {
+  const raisedPct = pctRaised(goal, raised); // 0..100
+  return mode === "emptying" ? 100 - raisedPct : raisedPct;
+}
 
-      // Donation bag — by default it EMPTIES as we approach the goal
-      function DonationBag({ goal, raised, mode = "emptying" }) {
-        const pctRaised = Math.max(0, Math.min(100, (raised / Math.max(goal, 1)) * 100));
-        const pct = mode === "emptying" ? 100 - pctRaised : pctRaised; // height of green area
-        const fmt = new Intl.NumberFormat("en-CA", { style: "currency", currency: "CAD", maximumFractionDigits: 0 });
+// Map a 0..100 "level" into the inner cavity defined by top/bottom padding
+export function paddedFillHeight(levelPct: number, topPadPct: number, bottomPadPct: number): number {
+  const usable = Math.max(0, 100 - topPadPct - bottomPadPct);
+  return bottomPadPct + (clamp01(levelPct / 100) * usable);
+}
 
-        return (
-          <div className="mt-2">
-            <div className="relative w-28 h-40 mx-auto">
-              {/* Bag outline */}
-              <div className="absolute inset-0 border-4 border-emerald-700 rounded-b-full rounded-t-lg"></div>
-              {/* Fill (remaining if emptying, raised if filling) */}
-              <div
-                aria-label={mode === "emptying" ? `Remaining ${100 - pctRaised}%` : `Raised ${pctRaised}%`}
-                className="absolute bottom-0 left-0 right-0 bg-emerald-500/90 rounded-b-full"
-                style={{ height: pct + "%", transition: "height 800ms ease-in-out" }}
-              ></div>
-            </div>
-            <div className="mt-2 text-center text-sm text-emerald-900">
-              <div className="font-semibold">{fmt.format(raised)} / {fmt.format(goal)}</div>
-              <div className="opacity-80">{Math.round(pctRaised)}% of goal</div>
-            </div>
+// Poll a JSON file hosted in your repo (e.g. ./progress.json) for live updates.
+// File format: { "goal": 10000, "raised": 3500 }
+function useProgress({ url, defaultGoal, defaultRaised, intervalMs = 60000 }: { url?: string; defaultGoal: number; defaultRaised: number; intervalMs?: number; }) {
+  const [goal, setGoal] = React.useState<number>(getParamNumber("goal", defaultGoal));
+  const [raised, setRaised] = React.useState<number>(getParamNumber("raised", defaultRaised));
+
+  React.useEffect(() => {
+    let timer: number | undefined;
+    async function fetchOnce() {
+      if (!url) return;
+      try {
+        const res = await fetch(url, { cache: "no-store" });
+        if (!res.ok) return;
+        const data = await res.json();
+        if (typeof data.goal === "number") setGoal(data.goal);
+        if (typeof data.raised === "number") setRaised(data.raised);
+      } catch {}
+    }
+    fetchOnce();
+    if (url && intervalMs > 0) {
+      timer = window.setInterval(fetchOnce, intervalMs);
+    }
+    return () => { if (timer) window.clearInterval(timer); };
+  }, [url, intervalMs]);
+
+  return { goal, raised } as const;
+}
+
+/*************************
+ * Small UI primitives
+ *************************/
+function Logo({ src, alt, size = "w-24 h-24", frame = false }: { src: string; alt: string; size?: string; frame?: boolean; }) {
+  const frameClasses = frame ? "rounded-md bg-white p-1 shadow-sm border border-white/60" : "";
+  return <img src={src} alt={alt} className={`${size} object-contain ${frameClasses}`} />;
+}
+
+/*************************
+ * Donation Bag (FILLING by default)
+ *************************/
+function DonationBag({
+  goal,
+  raised,
+  mode = "filling",
+  image,
+  topPadPct = 12,      // trim top spout/air area (in percent of height)
+  bottomPadPct = 8,    // trim tube/bottom radius area
+  showLevelBadge = true
+}: {
+  goal: number;
+  raised: number;
+  mode?: "emptying" | "filling";
+  image: string;
+  topPadPct?: number;
+  bottomPadPct?: number;
+  showLevelBadge?: boolean;
+}) {
+  console.assert(Number.isFinite(goal) && goal > 0, "goal should be a positive number");
+  console.assert(Number.isFinite(raised) && raised >= 0, "raised should be >= 0");
+
+  // Base level percentage (0..100)
+  const levelPct = computeHeightPct(goal, raised, mode);
+  const fillHeightPct = paddedFillHeight(levelPct, topPadPct, bottomPadPct);
+
+  const fmt = new Intl.NumberFormat("en-CA", { style: "currency", currency: "CAD", maximumFractionDigits: 0 });
+
+  return (
+    <div className="mt-2">
+      <div className="relative w-32 h-48 mx-auto">
+        {/* Hidden image to maintain aspect & alt text */}
+        <img src={image} alt="IV bag silhouette" className="invisible w-full h-full object-contain" />
+
+        {/* Green fluid clipped to bag */}
+        <div
+          className="absolute inset-x-0 bottom-0"
+          style={{
+            height: `${fillHeightPct}%`,
+            transition: "height 800ms ease-in-out",
+            background: "linear-gradient(180deg, rgba(16,185,129,0.95), rgba(16,185,129,0.75))",
+            WebkitMaskImage: `url(${image})`,
+            maskImage: `url(${image})`,
+            WebkitMaskRepeat: "no-repeat",
+            maskRepeat: "no-repeat",
+            WebkitMaskSize: "contain",
+            maskSize: "contain",
+            WebkitMaskPosition: "center",
+            maskPosition: "center",
+          }}
+        />
+
+        {/* Gloss overlay */}
+        <div
+          className="pointer-events-none absolute inset-0"
+          style={{
+            WebkitMaskImage: `url(${image})`,
+            maskImage: `url(${image})`,
+            WebkitMaskRepeat: "no-repeat",
+            maskRepeat: "no-repeat",
+            WebkitMaskSize: "contain",
+            maskSize: "contain",
+            WebkitMaskPosition: "center",
+            maskPosition: "center",
+            background:
+              "linear-gradient(135deg, rgba(255,255,255,0.55) 0%, rgba(255,255,255,0.0) 40%, rgba(0,0,0,0.05) 60%, rgba(255,255,255,0.25) 100%)",
+            mixBlendMode: "overlay",
+            opacity: 0.6,
+          }}
+        />
+
+        {/* Level badge aligned to the fluid top */}
+        {showLevelBadge && (
+          <div
+            className="absolute left-full ml-2"
+            style={{ top: `${100 - fillHeightPct}%`, transform: "translateY(-50%)" }}
+            aria-label={`Raised ${levelPct}%`}
+          >
+            <div className="rounded-md bg-emerald-700 text-white text-xs px-2 py-1 shadow">{Math.round(levelPct)}%</div>
           </div>
-        );
-      }
+        )}
+      </div>
+      <div className="mt-2 text-center text-sm text-emerald-900">
+        <div className="font-semibold">{fmt.format(raised)} / {fmt.format(goal)}</div>
+        <div className="opacity-80">{Math.round(levelPct)}% of goal</div>
+      </div>
+    </div>
+  );
+}
 
-      function TitleAside({ goal, raised, donateHref }) {
-        return (
-          <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-4">
-            <div className="text-emerald-900 font-bold">This season's progress</div>
-            <DonationBag goal={goal} raised={raised} mode="emptying" />
-            <a href={donateHref || "#donate"} className="mt-3 inline-flex items-center justify-center w-full rounded-lg bg-emerald-600 px-4 py-2 text-white font-semibold hover:bg-emerald-700">
+/*************************
+ * Right-side title aside
+ *************************/
+function TitleAside({ goal, raised, donateHref, bagImage }: { goal: number; raised: number; donateHref?: string; bagImage: string; }) {
+  const pct = pctRaised(goal, raised);
+  const fmt = new Intl.NumberFormat("en-CA", { style: "currency", currency: "CAD", maximumFractionDigits: 0 });
+  return (
+    <div className="bg-emerald-50 rounded-xl p-6 border border-emerald-100">
+      <div className="text-sm text-emerald-900/80 mb-2">This season's progress</div>
+      <div className="grid grid-cols-[auto_1fr] gap-4 items-center">
+        <DonationBag goal={goal} raised={raised} mode="filling" image={bagImage} topPadPct={12} bottomPadPct={8} showLevelBadge />
+        <div>
+          <div className="w-full h-3 bg-white rounded-full border border-emerald-200 overflow-hidden">
+            <div className="h-full bg-emerald-600" style={{ width: `${pct}%`, transition: "width 0.6s ease" }} />
+          </div>
+          <div className="mt-2 font-semibold text-emerald-900">{fmt.format(raised)} / {fmt.format(goal)}</div>
+          {donateHref && (
+            <a
+              href={donateHref}
+              className="mt-3 inline-flex items-center justify-center rounded-xl bg-emerald-600 px-4 py-2 text-white font-semibold shadow hover:bg-emerald-700"
+            >
               Donate
             </a>
-            {donateHref && (
-              <a href={donateHref} className="mt-2 block text-center text-xs underline break-all text-emerald-900/80">{donateHref}</a>
-            )}
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/*************************
+ * Main Poster component
+ *************************/
+export default function Poster() {
+  // Logos
+  const anest_LOGO = "data:image/png;base64,..."; // or https://raw.githubusercontent.com/.../anest_logo.png
+  const HAVEN_LOGO =
+    "https://www.havenfamilyconnections.com/wp-content/uploads/2020/11/logo-haven-family-kids-house-color-white-text.png";
+  const LOGO_SIZE = "w-32 h-32";
+
+  // IV bag silhouette (your raw GitHub PNG)
+  const BAG_IMAGE = "https://raw.githubusercontent.com/Armour3d/Anesthesia_Haven_Website/refs/heads/main/iv-bag.png";
+
+  // QR settings
+  const qrImageSrc = ""; // e.g., https://i.ibb.co/abcd123/donate-qr.png
+  const qrLink = ""; // e.g., https://havenfamilyconnections.com/donate
+  const effectiveQrSrc =
+    qrImageSrc || (qrLink ? `https://api.qrserver.com/v1/create-qr-code/?size=320x320&data=${encodeURIComponent(qrLink)}` : "");
+
+  // Live progress (works on GitHub Pages if progress.json is next to index.html)
+  const { goal, raised } = useProgress({ url: "./progress.json", defaultGoal: 10000, defaultRaised: 3500, intervalMs: 60000 });
+
+  return (
+    <div className="w-[900px] mx-auto bg-gradient-to-b from-emerald-50 to-white p-8 print:w-[210mm] print:min-h-[297mm] print:mx-0 print:p-8">
+      <div className="bg-white rounded-2xl shadow-xl print:shadow-none border border-emerald-100">
+        {/* Top banner */}
+        <div className="relative overflow-hidden rounded-t-2xl">
+          <div className="h-40 bg-emerald-600" />
+          <div className="absolute inset-0 flex items-center justify-between px-8">
+            <div className="text-white">
+              <p className="uppercase tracking-[0.25em] text-sm">University of Saskatchewan Anesthesia Department</p>
+              <p className="text-2xl font-semibold opacity-90">In support of Haven Family Connections</p>
+            </div>
+            <div className="flex items-center gap-4">
+              <Logo src={anest_LOGO} alt="U of S Anesthesia logo" size={LOGO_SIZE} />
+              <Logo src={HAVEN_LOGO} alt="Haven Kids' House logo" size={LOGO_SIZE} />
+            </div>
           </div>
-        );
-      }
+        </div>
 
-      /* -------- Main poster -------- */
-      function Poster() {
-        // Logos
-        const anest_LOGO =
-          "https://raw.githubusercontent.com/Armour3d/dump/refs/heads/main/IMG-20251003-WA0000%20(1).jpg";
-        const HAVEN_LOGO =
-          "https://www.havenfamilyconnections.com/wp-content/uploads/2020/11/logo-haven-family-kids-house-color-white-text.png";
-        const LOGO_SIZE = "w-32 h-32";
+        {/* Title + Aside */}
+        <div className="px-8 pt-8 grid grid-cols-1 md:grid-cols-[1.5fr_1fr] gap-6 items-start">
+          <div>
+            <h1 className="text-5xl font-extrabold leading-tight text-emerald-900">
+              <span className="block">Induction to Impact:</span>
+              <span className="block text-emerald-700">Operation Haven</span>
+            </h1>
+            <p className="mt-3 text-xl italic text-emerald-800">Care in the OR. Care in our community.</p>
+            <div className="mt-5 flex flex-wrap items-center gap-3 text-emerald-900">
+              <span className="inline-flex items-center rounded-full bg-emerald-100 px-3 py-1 text-sm font-semibold">Fundraising campaign</span>
+              <span className="inline-flex items-center rounded-full bg-emerald-100 px-3 py-1 text-sm">October to December 2025</span>
+              <span className="inline-flex items-center rounded-full bg-emerald-100 px-3 py-1 text-sm">Saskatoon, SK</span>
+            </div>
+          </div>
+          <TitleAside goal={goal} raised={raised} donateHref={qrLink} bagImage={BAG_IMAGE} />
+        </div>
 
-        // QR
-        const qrImageSrc = "";             // e.g., https://i.ibb.co/abcd123/donate-qr.png
-        const qrLink = "";                 // e.g., https://havenfamilyconnections.com/donate
-        const effectiveQrSrc = qrImageSrc || (qrLink ? `https://api.qrserver.com/v1/create-qr-code/?size=320x320&data=${encodeURIComponent(qrLink)}` : "");
+        {/* Body grid */}
+        <div className="px-8 py-8 grid grid-cols-1 md:grid-cols-3 gap-6">
+          {/* Left */}
+          <div className="md:col-span-2 bg-emerald-50 rounded-xl p-6 border border-emerald-100">
+            <h2 className="text-2xl font-bold text-emerald-900">Why Haven</h2>
+            <p className="mt-2 text-emerald-900 leading-relaxed">
+              Haven Family Connections supports children and caregivers with supervised visits, parenting support, and
+              safe spaces that keep families connected. Our anesthesia team serves patients every day. This season we are
+              extending that care into our community by helping Haven deliver practical support when families need it most.
+            </p>
 
-        // Live progress (uses a relative path so it works on project pages)
-        // Create ./progress.json alongside index.html to enable auto-update
-        const { goal, raised } = useProgress({
-          url: "./progress.json",
-          defaultGoal: 20000,
-          defaultRaised: 7350,
-          intervalMs: 60000
-        });
+            <h3 className="mt-5 text-xl font-semibold text-emerald-900">How you can participate</h3>
+            <ul className="mt-2 list-disc pl-6 space-y-1 text-emerald-900">
+              <li>Give once or set up a monthly gift.</li>
+              <li>Join unit challenges and friendly department match days.</li>
+              <li>Donate new winter wear, diapers, formula, and gift cards.</li>
+              <li>Share the campaign with colleagues and friends.</li>
+            </ul>
 
-        return (
-          <div className="w-[900px] mx-auto bg-gradient-to-b from-emerald-50 to-white p-8 print:w-[210mm] print:min-h-[297mm] print:mx-0 print:p-8">
-            <div className="bg-white rounded-2xl shadow-xl print:shadow-none border border-emerald-100">
-              {/* Top banner */}
-              <div className="relative overflow-hidden rounded-t-2xl">
-                <div className="h-40 bg-emerald-600"></div>
-                <div className="absolute inset-0 flex items-center justify-between px-8">
-                  <div className="text-white">
-                    <p className="uppercase tracking-[0.25em] text-sm">USASK Anesthesia Department</p>
-                    <p className="text-2xl font-semibold opacity-90">In support of Haven Family Connections</p>
-                  </div>
-                  <div className="flex items-center gap-4">
-                    <Logo src={anest_LOGO} alt="U of S Anesthesia logo" size={LOGO_SIZE} />
-                    <Logo src={HAVEN_LOGO} alt="Haven Kids' House logo" size={LOGO_SIZE} />
-                  </div>
+            {/* Donation bag progress (full-size in body) */}
+            <div className="mt-6">
+              <h3 className="text-xl font-semibold text-emerald-900">Campaign progress</h3>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-6 items-center">
+                <div className="sm:col-span-1">
+                  <DonationBag goal={goal} raised={raised} mode="filling" image={BAG_IMAGE} topPadPct={12} bottomPadPct={8} showLevelBadge />
                 </div>
-              </div>
-
-              {/* Title + Aside (uses whitespace on right) */}
-              <div className="px-8 pt-8 grid grid-cols-1 md:grid-cols-[1.5fr_1fr] gap-6 items-start">
-                <div>
-                  <h1 className="text-5xl font-extrabold leading-tight text-emerald-900">
-                    <span className="block">Induction to Impact:</span>
-                    <span className="block text-emerald-700">Operation Haven</span>
-                  </h1>
-                  <p className="mt-3 text-xl italic text-emerald-800">Care in the OR. Care in our community.</p>
-                  <div className="mt-5 flex flex-wrap items-center gap-3 text-emerald-900">
-                    <span className="inline-flex items-center rounded-full bg-emerald-100 px-3 py-1 text-sm font-semibold">Fundraising campaign</span>
-                    <span className="inline-flex items-center rounded-full bg-emerald-100 px-3 py-1 text-sm">October to December 2025</span>
-                    <span className="inline-flex items-center rounded-full bg-emerald-100 px-3 py-1 text-sm">Saskatoon, SK</span>
-                  </div>
-                </div>
-                <TitleAside goal={goal} raised={raised} donateHref={qrLink} />
-              </div>
-
-              {/* Body */}
-              <div className="px-8 py-8 grid grid-cols-1 md:grid-cols-3 gap-6">
-                <div className="md:col-span-2 bg-emerald-50 rounded-xl p-6 border border-emerald-100">
-                  <h2 className="text-2xl font-bold text-emerald-900">Why Haven</h2>
-                  <p className="mt-2 text-emerald-900 leading-relaxed">
-                    Haven Family Connections supports children and caregivers with supervised visits, parenting support, and
-                    safe spaces that keep families connected. Our anesthesia team serves patients every day. This season we are
-                    extending that care into our community by helping Haven deliver practical support when families need it most.
+                <div className="sm:col-span-2 text-emerald-900">
+                  <p>
+                    The bag fills as we get closer to our goal. When we hit 100 percent, the bag will be fully filled — a
+                    visual cue that the campaign objective has been reached.
                   </p>
-
-                  <h3 className="mt-5 text-xl font-semibold text-emerald-900">How you can participate</h3>
-                  <ul className="mt-2 list-disc pl-6 space-y-1 text-emerald-900">
-                    <li>Give once or set up a monthly gift.</li>
-                    <li>Join unit challenges and friendly department match days.</li>
-                    <li>Donate new winter wear, diapers, formula, and gift cards.</li>
-                    <li>Share the campaign with colleagues and friends.</li>
-                  </ul>
-
-                  {/* Larger bag demo */}
-                  <div className="mt-6">
-                    <h3 className="text-xl font-semibold text-emerald-900">Campaign progress</h3>
-                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-6 items-center">
-                      <div className="sm:col-span-1">
-                        <DonationBag goal={goal} raised={raised} mode="emptying" />
-                      </div>
-                      <div className="sm:col-span-2 text-emerald-900">
-                        <p>The bag empties as we get closer to the goal. When we hit 100%, the bag will be empty.</p>
-                        <p className="mt-2 text-sm opacity-80">Tip: add <code>?goal=25000&raised=18000</code> to the URL to preview states.</p>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="space-y-6">
-                  <div className="rounded-xl border border-emerald-100 p-6">
-                    <h3 className="text-xl font-bold text-emerald-900">Key dates</h3>
-                    <ul className="mt-2 space-y-1 text-emerald-900">
-                      <li><span className="font-semibold">Kickoff:</span> Early October</li>
-                      <li><span className="font-semibold">Giving Tuesday:</span> Last Tuesday of November</li>
-                      <li><span className="font-semibold">Final push:</span> Mid December</li>
-                    </ul>
-                  </div>
-
-                  <div className="rounded-xl border border-emerald-100 p-6">
-                    <h3 className="text-xl font-bold text-emerald-900">Scan to donate</h3>
-                    {effectiveQrSrc ? (
-                      <img src={effectiveQrSrc} alt={qrLink ? `QR code for ${qrLink}` : "Donation QR"} className="mt-3 w-40 h-40 object-contain rounded-lg border border-emerald-200 bg-white" />
-                    ) : (
-                      <div className="mt-3 w-40 h-40 bg-emerald-100 rounded-lg grid place-content-center text-emerald-700 font-semibold">QR CODE</div>
-                    )}
-                  </div>
-
-                  <div className="rounded-xl border border-emerald-100 p-6">
-                    <h3 className="text-xl font-bold text-emerald-900">Contact</h3>
-                    <p className="mt-2 text-emerald-900 text-sm">Questions or to coordinate in-kind support:</p>
-                    <p className="text-emerald-900 font-semibold">uofs.anesthesia@usask.ca</p>
-                  </div>
-                </div>
-              </div>
-
-              <div className="px-8 pb-8">
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                  <div className="rounded-xl bg-emerald-50 p-6 border border-emerald-100">
-                    <h4 className="text-lg font-semibold text-emerald-900">Sponsorship</h4>
-                    <p className="mt-1 text-sm text-emerald-900">Organizations can underwrite a match day or donate supplies. Recognition available.</p>
-                  </div>
-                  <div className="rounded-xl bg-emerald-50 p-6 border border-emerald-100">
-                    <h4 className="text-lg font-semibold text-emerald-900">Receipting</h4>
-                    <p className="mt-1 text-sm text-emerald-900">Charitable tax receipts available through Haven Family Connections.</p>
-                  </div>
-                  <div className="rounded-xl bg-emerald-50 p-6 border border-emerald-100">
-                    <h4 className="text-lg font-semibold text-emerald-900">Share</h4>
-                    <p className="mt-1 text-sm text-emerald-900">Post this poster on unit boards, lounges, and clinics. Share the link with your networks.</p>
-                  </div>
-                </div>
-
-                <div className="mt-6 text-xs text-emerald-900/80">
-                  University of Saskatchewan Anesthesia Department in collaboration with Haven Family Connections. This material is for promotional use.
+                  <p className="mt-2 text-sm opacity-80">
+                    Tip: append <code>?goal=20000&raised=12000</code> to the page URL to preview different states.
+                  </p>
                 </div>
               </div>
             </div>
           </div>
-        );
-      }
 
-      ReactDOM.createRoot(document.getElementById("root")).render(<Poster />);
-    </script>
-  </body>
-</html>
+          {/* Right */}
+          <div className="space-y-6">
+            <div className="rounded-xl border border-emerald-100 p-6">
+              <h3 className="text-xl font-bold text-emerald-900">Key dates</h3>
+              <ul className="mt-2 space-y-1 text-emerald-900">
+                <li><span className="font-semibold">Kickoff:</span> Early October</li>
+                <li><span className="font-semibold">Giving Tuesday:</span> Last Tuesday of November</li>
+                <li><span className="font-semibold">Final push:</span> Mid December</li>
+              </ul>
+            </div>
+
+            <div className="rounded-xl border border-emerald-100 p-6">
+              <h3 className="text-xl font-bold text-emerald-900">Scan to donate</h3>
+              {effectiveQrSrc ? (
+                <img
+                  src={effectiveQrSrc}
+                  alt={qrLink ? `QR code for ${qrLink}` : "Donation QR"}
+                  className="mt-3 w-40 h-40 object-contain rounded-lg border border-emerald-200 bg-white"
+                />
+              ) : (
+                <div className="mt-3 w-40 h-40 bg-emerald-100 rounded-lg grid place-content-center text-emerald-700 font-semibold">
+                  QR CODE
+                </div>
+              )}
+            </div>
+
+            <div className="rounded-xl border border-emerald-100 p-6">
+              <h3 className="text-xl font-bold text-emerald-900">Contact</h3>
+              <p className="mt-2 text-emerald-900 text-sm">Questions or to coordinate in-kind support:</p>
+              <p className="text-emerald-900 font-semibold">uofs.anesthesia@usask.ca</p>
+            </div>
+          </div>
+        </div>
+
+        {/* Footer */}
+        <div className="px-8 pb-8">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+            <div className="rounded-xl bg-emerald-50 p-6 border border-emerald-100">
+              <h4 className="text-lg font-semibold text-emerald-900">Sponsorship</h4>
+              <p className="mt-1 text-sm text-emerald-900">Organizations can underwrite a match day or donate supplies. Recognition available.</p>
+            </div>
+            <div className="rounded-xl bg-emerald-50 p-6 border border-emerald-100">
+              <h4 className="text-lg font-semibold text-emerald-900">Receipting</h4>
+              <p className="mt-1 text-sm text-emerald-900">Charitable tax receipts available through Haven Family Connections.</p>
+            </div>
+            <div className="rounded-xl bg-emerald-50 p-6 border border-emerald-100">
+              <h4 className="text-lg font-semibold text-emerald-900">Share</h4>
+              <p className="mt-1 text-sm text-emerald-900">Post this poster on unit boards, lounges, and clinics. Share the link with your networks.</p>
+            </div>
+          </div>
+          <div className="mt-6 text-xs text-emerald-900/80">
+            University of Saskatchewan Anesthesia Department in collaboration with Haven Family Connections. This material is for promotional use.
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/*************************
+ * Runtime tests (do not change existing behavior)
+ *************************/
+function PosterTests() {
+  // pctRaised
+  console.assert(pctRaised(10000, 0) === 0, "pctRaised 0% failed");
+  console.assert(pctRaised(10000, 5000) === 50, "pctRaised 50% failed");
+  console.assert(pctRaised(10000, 15000) === 100, "pctRaised capped 100% failed");
+
+  // clamp01
+  console.assert(clamp01(-1) === 0 && clamp01(2) === 1 && clamp01(0.5) === 0.5, "clamp01 failed");
+
+  // computeHeightPct (filling vs emptying)
+  console.assert(computeHeightPct(100, 0, "filling") === 0, "filling height at 0 raised");
+  console.assert(computeHeightPct(100, 50, "filling") === 50, "filling height at 50%");
+  console.assert(computeHeightPct(100, 100, "filling") === 100, "filling height at 100%");
+  console.assert(computeHeightPct(100, 100, "emptying") === 0, "emptying height at 100%");
+
+  // padded cavity mapping
+  const top = 12, bot = 8;
+  console.assert(Math.round(paddedFillHeight(0, top, bot)) === bot, "pad map 0% -> bottom pad");
+  console.assert(Math.round(paddedFillHeight(100, top, bot)) === 100 - top, "pad map 100% -> 100-top");
+  console.assert(Math.round(paddedFillHeight(50, top, bot)) === bot + Math.round((100 - top - bot) * 0.5), "pad map 50% midpoint");
+  return null;
+}
+
+// Mount tests when this module is imported (no UI output)
+PosterTests();
