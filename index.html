@@ -12,13 +12,24 @@
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
     <style>
       @media print { body { margin: 0 } }
+      /* show runtime errors at bottom so “blank page” is easier to diagnose */
+      #err { position: fixed; left:0; right:0; bottom:0; background:#fee; color:#900; padding:.5rem .75rem; font:14px system-ui; display:none; white-space:pre-wrap }
     </style>
   </head>
   <body class="bg-emerald-50">
     <div id="root"></div>
+    <div id="err"></div>
+    <script>
+      window.addEventListener('error', e => {
+        const box = document.getElementById('err');
+        box.style.display = 'block';
+        box.textContent = 'JS Error: ' + e.message;
+      });
+    </script>
 
+    <!-- Your app (JSX runs via Babel in the browser) -->
     <script type="text/babel" data-presets="react">
-      // --- Progress utilities ---
+      /* -------- Progress utilities -------- */
       function getParamNumber(name, fallback) {
         const url = new URL(window.location.href);
         const v = url.searchParams.get(name);
@@ -26,8 +37,7 @@
         return Number.isFinite(n) ? n : fallback;
       }
 
-      // Poll a JSON file (optional).
-      // File format: { "goal": 20000, "raised": 7350 }
+      // Optional: fetch live { "goal": 20000, "raised": 7350 } from ./progress.json
       function useProgress({ url, defaultGoal, defaultRaised, intervalMs = 60000 }) {
         const [goal, setGoal] = React.useState(getParamNumber("goal", defaultGoal));
         const [raised, setRaised] = React.useState(getParamNumber("raised", defaultRaised));
@@ -52,13 +62,13 @@
         return { goal, raised };
       }
 
-      // Simple image
+      /* -------- UI bits -------- */
       function Logo({ src, alt, size = "w-24 h-24", frame = false }) {
         const frameClasses = frame ? "rounded-md bg-white p-1 shadow-sm border border-white/60" : "";
-        return <img src={src} alt={alt} className={size + " object-contain " + frameClasses} />;
+        return <img src={src} alt={alt} className={`${size} object-contain ${frameClasses}`} />;
       }
 
-      // Donation bag — by default it EMPTIES as you approach the goal
+      // Donation bag — by default it EMPTIES as we approach the goal
       function DonationBag({ goal, raised, mode = "emptying" }) {
         const pctRaised = Math.max(0, Math.min(100, (raised / Math.max(goal, 1)) * 100));
         const pct = mode === "emptying" ? 100 - pctRaised : pctRaised; // height of green area
@@ -69,7 +79,7 @@
             <div className="relative w-28 h-40 mx-auto">
               {/* Bag outline */}
               <div className="absolute inset-0 border-4 border-emerald-700 rounded-b-full rounded-t-lg"></div>
-              {/* Fill */}
+              {/* Fill (remaining if emptying, raised if filling) */}
               <div
                 aria-label={mode === "emptying" ? `Remaining ${100 - pctRaised}%` : `Raised ${pctRaised}%`}
                 className="absolute bottom-0 left-0 right-0 bg-emerald-500/90 rounded-b-full"
@@ -84,7 +94,6 @@
         );
       }
 
-      // Progress card that sits in the whitespace beside the title
       function TitleAside({ goal, raised, donateHref }) {
         return (
           <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-4">
@@ -100,21 +109,22 @@
         );
       }
 
+      /* -------- Main poster -------- */
       function Poster() {
-        // --- Replace with your final image URLs ---
+        // Logos
         const anest_LOGO =
           "https://raw.githubusercontent.com/Armour3d/dump/refs/heads/main/IMG-20251003-WA0000%20(1).jpg";
         const HAVEN_LOGO =
           "https://www.havenfamilyconnections.com/wp-content/uploads/2020/11/logo-haven-family-kids-house-color-white-text.png";
         const LOGO_SIZE = "w-32 h-32";
 
-        // --- QR settings ---
+        // QR
         const qrImageSrc = "";             // e.g., https://i.ibb.co/abcd123/donate-qr.png
         const qrLink = "";                 // e.g., https://havenfamilyconnections.com/donate
         const effectiveQrSrc = qrImageSrc || (qrLink ? `https://api.qrserver.com/v1/create-qr-code/?size=320x320&data=${encodeURIComponent(qrLink)}` : "");
 
-        // --- Live progress ---
-        // Prefer relative path so it works on GitHub Pages: ./progress.json (same folder as index.html)
+        // Live progress (uses a relative path so it works on project pages)
+        // Create ./progress.json alongside index.html to enable auto-update
         const { goal, raised } = useProgress({
           url: "./progress.json",
           defaultGoal: 20000,
